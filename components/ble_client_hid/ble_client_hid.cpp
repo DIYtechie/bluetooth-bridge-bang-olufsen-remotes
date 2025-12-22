@@ -9,6 +9,7 @@
 #include <sstream>
 #include <string>
 
+#include "esphome/core/application.h"  // <-- NEW: for esphome::App.get_name()
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 
@@ -25,10 +26,15 @@ static constexpr uint16_t HID_INPUT_HANDLE = 62;
 static constexpr uint16_t HID_CCC_HANDLE = 63;
 
 // -----------------------------------------------------------------------------
+// Home Assistant event name for all remotes using this bridge.
+// -----------------------------------------------------------------------------
+static const char *const HA_EVENT_TYPE = "esphome.remote_action";
+
+// -----------------------------------------------------------------------------
 // Multi-press timing (device-side interpretation)
 // -----------------------------------------------------------------------------
-static constexpr uint32_t MULTIPRESS_GAP_MS = 400;   // single vs double vs triple
-static constexpr uint32_t LONG_PRESS_MS = 1500;      // long press threshold
+static constexpr uint32_t MULTIPRESS_GAP_MS = 400;  // single vs double vs triple
+static constexpr uint32_t LONG_PRESS_MS = 1500;     // long press threshold
 
 // -----------------------------------------------------------------------------
 // CCC/notify re-enable guard: prevents CCC spam during normal operation.
@@ -282,11 +288,16 @@ void BLEClientHID::send_input_report_event(esp_ble_gattc_cb_param_t *p_data) {
     // NOTE: ESPHome CustomAPIDevice only supports map<string,string> for event data.
     // Keeping it flat is the most compatible approach.
     std::map<std::string, std::string> data;
-    data["payload"] = action;  // convenient for Node-RED / automations
     data["action"] = action;
     data["raw"] = raw_hex;
     data["clicks"] = std::to_string(clicks);
-    this->fire_homeassistant_event("esphome.beosound_action", data);
+
+    // NEW: identifiers (no YAML/init changes required)
+    data["remote"] = this->parent()->address_str();  // BLE MAC
+    data["source"] = esphome::App.get_name();        // ESPHome node name (esphome.name)
+
+    // NEW: unified event name
+    this->fire_homeassistant_event(HA_EVENT_TYPE, data);
 #endif
 
     // Optional debug helpers (show last action + value)
@@ -302,7 +313,8 @@ void BLEClientHID::send_input_report_event(esp_ble_gattc_cb_param_t *p_data) {
       this->last_event_value_sensor->publish_state(v);
     }
 
-    ESP_LOGI(TAG, "BeoSound action: %s raw=%s clicks=%d", action.c_str(), raw_hex.c_str(), clicks);
+    ESP_LOGI(TAG, "Remote action: %s remote=%s source=%s raw=%s clicks=%d", action.c_str(),
+             this->parent()->address_str().c_str(), esphome::App.get_name().c_str(), raw_hex.c_str(), clicks);
   };
 
   // ---------------------------------------------------------------------------
@@ -348,23 +360,24 @@ void BLEClientHID::send_input_report_event(esp_ble_gattc_cb_param_t *p_data) {
       if (st2.is_down && !st2.long_fired) {
         st2.long_fired = true;
         st2.click_count = 0;
+
         // emit long
         std::string action = std::string(button_name(press_btn)) + "_long";
-        // raw for long doesn't matter much; we keep last seen raw from notify in outer scope,
-        // but this lambda runs later, so we don't reuse raw here.
-        // Use action only; raw debug will still show last raw received on next notify.
+
 #ifdef USE_API
         std::map<std::string, std::string> data;
-        data["payload"] = action;
         data["action"] = action;
-        data["raw"] = "";  // unknown at timer time
+        data["raw"] = "";  // timer context (no raw available here)
         data["clicks"] = "-1";
-        this->fire_homeassistant_event("esphome.beosound_action", data);
+        data["remote"] = this->parent()->address_str();
+        data["source"] = esphome::App.get_name();
+        this->fire_homeassistant_event(HA_EVENT_TYPE, data);
 #endif
         if (this->last_event_usage_text_sensor != nullptr) {
           this->last_event_usage_text_sensor->publish_state(action);
         }
-        ESP_LOGI(TAG, "BeoSound action: %s raw=<timer> clicks=-1", action.c_str());
+        ESP_LOGI(TAG, "Remote action: %s remote=%s source=%s raw=<timer> clicks=-1", action.c_str(),
+                 this->parent()->address_str().c_str(), esphome::App.get_name().c_str());
       }
     });
 
@@ -418,19 +431,20 @@ void BLEClientHID::send_input_report_event(esp_ble_gattc_cb_param_t *p_data) {
         action = std::string(button_name(rb)) + "_triple";
       }
 
-      // emit finalize event
 #ifdef USE_API
       std::map<std::string, std::string> data;
-      data["payload"] = action;
       data["action"] = action;
       data["raw"] = "";  // timer context
       data["clicks"] = std::to_string(st2.click_count);
-      this->fire_homeassistant_event("esphome.beosound_action", data);
+      data["remote"] = this->parent()->address_str();
+      data["source"] = esphome::App.get_name();
+      this->fire_homeassistant_event(HA_EVENT_TYPE, data);
 #endif
       if (this->last_event_usage_text_sensor != nullptr) {
         this->last_event_usage_text_sensor->publish_state(action);
       }
-      ESP_LOGI(TAG, "BeoSound action: %s raw=<timer> clicks=%d", action.c_str(), st2.click_count);
+      ESP_LOGI(TAG, "Remote action: %s remote=%s source=%s raw=<timer> clicks=%d", action.c_str(),
+               this->parent()->address_str().c_str(), esphome::App.get_name().c_str(), st2.click_count);
 
       st2.click_count = 0;
     });
