@@ -9,7 +9,7 @@
 #include <sstream>
 #include <string>
 
-#include "esphome/core/application.h"  // <-- NEW: for esphome::App.get_name()
+#include "esphome/core/application.h"  // for esphome::App.get_name()
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 
@@ -26,11 +26,6 @@ static constexpr uint16_t HID_INPUT_HANDLE = 62;
 static constexpr uint16_t HID_CCC_HANDLE = 63;
 
 // -----------------------------------------------------------------------------
-// Home Assistant event name for all remotes using this bridge.
-// -----------------------------------------------------------------------------
-static const char *const HA_EVENT_TYPE = "esphome.remote_action";
-
-// -----------------------------------------------------------------------------
 // Multi-press timing (device-side interpretation)
 // -----------------------------------------------------------------------------
 static constexpr uint32_t MULTIPRESS_GAP_MS = 400;  // single vs double vs triple
@@ -40,6 +35,9 @@ static constexpr uint32_t LONG_PRESS_MS = 1500;     // long press threshold
 // CCC/notify re-enable guard: prevents CCC spam during normal operation.
 // -----------------------------------------------------------------------------
 static constexpr uint32_t CCC_MIN_INTERVAL_MS = 5000;  // min time between CCC attempts once enabled
+
+// Home Assistant event name (changed from esphome.beosound_action)
+static const char *const HA_EVENT_REMOTE_ACTION = "esphome.remote_action";
 
 struct CccState {
   bool enabled{false};
@@ -160,7 +158,8 @@ static void write_ccc_enable_notify_(BLEClientHID *self, const char *reason, boo
   if (rn != ESP_OK) {
     ESP_LOGW(TAG, "register_for_notify failed for handle %u err=%d (%s)", HID_INPUT_HANDLE, (int) rn, reason);
   } else {
-    ESP_LOGI(TAG, "Fast notify registration started for HID handle %u (%s)", HID_INPUT_HANDLE, reason);
+    ESP_LOGI(TAG, "Fast notify registration started for HID handle %u (%s)", HID_INPUT_HANDLE, (int) HID_INPUT_HANDLE,
+             reason);
   }
 }
 
@@ -174,7 +173,7 @@ void BLEClientHID::loop() {
 
 void BLEClientHID::dump_config() {
   ESP_LOGCONFIG(TAG, "BLE Client HID (BeoSound Essence Remote):");
-  ESP_LOGCONFIG(TAG, "  MAC address      : %s", this->parent()->address_str().c_str());
+  ESP_LOGCONFIG(TAG, "  MAC address      : %s", this->parent()->address_str());
   ESP_LOGCONFIG(TAG, "  HID input handle : %u", HID_INPUT_HANDLE);
   ESP_LOGCONFIG(TAG, "  HID CCC handle   : %u", HID_CCC_HANDLE);
   ESP_LOGCONFIG(TAG, "  multi-press gap  : %ums", (unsigned) MULTIPRESS_GAP_MS);
@@ -212,7 +211,7 @@ void BLEClientHID::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t
       auto ret = esp_ble_set_encryption(param->connect.remote_bda, ESP_BLE_SEC_ENCRYPT);
       if (ret) {
         ESP_LOGE(TAG, "[%d] [%s] esp_ble_set_encryption error, status=%d", this->parent()->get_connection_index(),
-                 this->parent()->address_str().c_str(), ret);
+                 this->parent()->address_str(), ret);
       }
       break;
     }
@@ -239,7 +238,7 @@ void BLEClientHID::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t
     }
 
     case ESP_GATTC_DISCONNECT_EVT: {
-      ESP_LOGW(TAG, "[%s] Disconnected!", this->parent()->address_str().c_str());
+      ESP_LOGW(TAG, "[%s] Disconnected!", this->parent()->address_str());
       this->status_set_warning("Disconnected");
 
       reset_ccc_state_(this);
@@ -285,19 +284,24 @@ void BLEClientHID::send_input_report_event(esp_ble_gattc_cb_param_t *p_data) {
   // Helper to emit HA event + update debug sensors
   auto emit = [&](const std::string &action, int clicks) {
 #ifdef USE_API
-    // NOTE: ESPHome CustomAPIDevice only supports map<string,string> for event data.
-    // Keeping it flat is the most compatible approach.
+    // NOTE: fire_homeassistant_event() requires:
+    // api:
+    //   homeassistant_services: true
+    //
+    // Event data must be map<string,string> (flat).
     std::map<std::string, std::string> data;
+
+    // New: add remote + source for filtering / multi-remote setups
+    data["remote"] = this->parent()->address_str();   // BLE MAC
+    data["source"] = esphome::App.get_name();         // ESPHome device name
+
+    // Required / useful fields
     data["action"] = action;
     data["raw"] = raw_hex;
     data["clicks"] = std::to_string(clicks);
 
-    // NEW: identifiers (no YAML/init changes required)
-    data["remote"] = this->parent()->address_str();  // BLE MAC
-    data["source"] = esphome::App.get_name();        // ESPHome node name (esphome.name)
-
-    // NEW: unified event name
-    this->fire_homeassistant_event(HA_EVENT_TYPE, data);
+    // Changed: event name + removed "payload" (was a duplicate of "action")
+    this->fire_homeassistant_event(HA_EVENT_REMOTE_ACTION, data);
 #endif
 
     // Optional debug helpers (show last action + value)
@@ -314,7 +318,7 @@ void BLEClientHID::send_input_report_event(esp_ble_gattc_cb_param_t *p_data) {
     }
 
     ESP_LOGI(TAG, "Remote action: %s remote=%s source=%s raw=%s clicks=%d", action.c_str(),
-             this->parent()->address_str().c_str(), esphome::App.get_name().c_str(), raw_hex.c_str(), clicks);
+             this->parent()->address_str(), esphome::App.get_name().c_str(), raw_hex.c_str(), clicks);
   };
 
   // ---------------------------------------------------------------------------
@@ -351,7 +355,7 @@ void BLEClientHID::send_input_report_event(esp_ble_gattc_cb_param_t *p_data) {
     // Emit pressed
     emit(std::string(button_name(press_btn)) + "_pressed", -1);
 
-    // Start long-press timer (member access OK)
+    // Start long-press timer
     const std::string long_key = std::string("essence_long_") + button_name(press_btn);
     this->cancel_timeout(long_key);
     this->set_timeout(long_key, LONG_PRESS_MS, [this, press_btn]() {
@@ -361,23 +365,24 @@ void BLEClientHID::send_input_report_event(esp_ble_gattc_cb_param_t *p_data) {
         st2.long_fired = true;
         st2.click_count = 0;
 
-        // emit long
         std::string action = std::string(button_name(press_btn)) + "_long";
 
 #ifdef USE_API
         std::map<std::string, std::string> data;
-        data["action"] = action;
-        data["raw"] = "";  // timer context (no raw available here)
-        data["clicks"] = "-1";
         data["remote"] = this->parent()->address_str();
         data["source"] = esphome::App.get_name();
-        this->fire_homeassistant_event(HA_EVENT_TYPE, data);
+        data["action"] = action;
+        data["raw"] = "";          // timer context (no new raw)
+        data["clicks"] = "-1";
+        this->fire_homeassistant_event(HA_EVENT_REMOTE_ACTION, data);
 #endif
+
         if (this->last_event_usage_text_sensor != nullptr) {
           this->last_event_usage_text_sensor->publish_state(action);
         }
+
         ESP_LOGI(TAG, "Remote action: %s remote=%s source=%s raw=<timer> clicks=-1", action.c_str(),
-                 this->parent()->address_str().c_str(), esphome::App.get_name().c_str());
+                 this->parent()->address_str(), esphome::App.get_name().c_str());
       }
     });
 
@@ -433,18 +438,20 @@ void BLEClientHID::send_input_report_event(esp_ble_gattc_cb_param_t *p_data) {
 
 #ifdef USE_API
       std::map<std::string, std::string> data;
+      data["remote"] = this->parent()->address_str();
+      data["source"] = esphome::App.get_name();
       data["action"] = action;
       data["raw"] = "";  // timer context
       data["clicks"] = std::to_string(st2.click_count);
-      data["remote"] = this->parent()->address_str();
-      data["source"] = esphome::App.get_name();
-      this->fire_homeassistant_event(HA_EVENT_TYPE, data);
+      this->fire_homeassistant_event(HA_EVENT_REMOTE_ACTION, data);
 #endif
+
       if (this->last_event_usage_text_sensor != nullptr) {
         this->last_event_usage_text_sensor->publish_state(action);
       }
+
       ESP_LOGI(TAG, "Remote action: %s remote=%s source=%s raw=<timer> clicks=%d", action.c_str(),
-               this->parent()->address_str().c_str(), esphome::App.get_name().c_str(), st2.click_count);
+               this->parent()->address_str(), esphome::App.get_name().c_str(), st2.click_count);
 
       st2.click_count = 0;
     });
