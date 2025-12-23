@@ -78,6 +78,12 @@ If you try a different remote, please open an issue and include:
 - **`homeassistant_services: true` must be enabled**
   - Required to emit Home Assistant events from the device firmware
 
+### The bluetooth MAC adress of your remote
+To find a Bluetooth remote’s MAC address on a Mac, first pair the remote with your Mac. Then open System Information (Option-click the Apple menu → System Information), go to Bluetooth, locate the remote in the device list, and read the Address field—this is the remote’s MAC address. Afterwards, remove it by choosing Forget This Device for the remote in Bluetooth settings.
+
+On Windows PC, pair the remote, then open Control Panel → Devices and Printers, right-click the device → Properties and look for Bluetooth address (or similar). 
+
+On Android, pair the remote, then go to Settings → Connected devices / Bluetooth, tap the gear/info icon next to the device, and look for the device address (if shown); if it isn’t displayed in the Bluetooth UI, you can typically see it using a Bluetooth scanner app that lists paired devices and their addresses.
 
 ## Installation (ESPHome external_components)
 
@@ -88,11 +94,11 @@ external_components:
   - source:
       type: git
       url: https://github.com/DIYtechie/bluetooth-bridge-bang-olufsen-remotes
-      ref: main
+      ref: master
     components: [ ble_client_hid ]
 ```
 
-> If you prefer pinning to a stable version later, replace `ref: main` with a tag like `ref: v0.1.0`.
+> If you prefer pinning to a stable version later, replace `ref: master` with a tag like `ref: v0.1.0`.
 
 
 ## Example YAML (BeoSound Essence Remote)
@@ -102,16 +108,20 @@ Example (copy/paste):
 ```yaml
 substitutions:
   # Device identity shown in ESPHome + Home Assistant
-  device_name: "beosound-essence-remote-bridge"
-  friendly_name: "BeoSound Essence Remote Bridge"
+  device_name: "b-o-remote-bridge"
+  friendly_name: "Remote Bridge"
 
-  remote_mac: "74:BB:28:07:ED:35" # <- Replace with your remote's BLE MAC address (as seen in a BLE scanner / ESPHome logs)
+  # Remote 1 (enabled by default)
+  remote_1_mac: "84:EB:18:07:DD:20" # <- Replace with your remote's BLE MAC address
+
+  # Remote 2 (optional - enable by uncommenting below + the ble_client + ble_client_hid blocks)
+  #remote_2_mac: "84:EB:18:07:DD:26" # <- Replace with your 2nd remote's BLE MAC address
 
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
   comment: >
-    ESPHome BLE client for BeoSound Essence Remote (HID over BLE).
+    ESPHome BLE client for Bang & Olufsen Remotes (HID over BLE).
     Parses button + wheel actions and emits Home Assistant events.
 
 esp32:
@@ -124,7 +134,7 @@ logger:
   level: INFO
   logs:
     esp32_ble: ERROR
-    esp32_ble_client: WARN
+    esp32_ble_client: ERROR
     ble_client_hid: INFO
     hid_parser: WARN
 
@@ -151,61 +161,62 @@ wifi:
   power_save_mode: none
 
 # NOTE:
-# Captive portal / fallback AP can be helpful during initial provisioning,
-# but while debugging BLE stability it can be useful to keep it disabled.
-# captive_portal:
-
+# This bridge can connect to multiple remotes at the same time.
+# Set esp32_ble.max_connections to match the number of remotes you enable below (1-3 recommended).
 esp32_ble:
   # Keep the BLE stack lightweight and quiet.
   disable_bt_logs: true
-  max_connections: 1
+  max_connections: 1          # <-- Set this to the number of remotes you use
   max_notifications: 64
 
 external_components:
   - source:
       type: git
       url: https://github.com/DIYtechie/bluetooth-bridge-bang-olufsen-remotes
-      ref: main
+      ref: master
     components: [ ble_client_hid ]
 
 esp32_ble_tracker:
-  # Scan parameters:
-  # Lower duty cycle reduces load, but may reconnect slightly slower.
-  # If you miss the first button press after the remote wakes up, consider a faster scan:
-  #   interval: 320ms
-  #   window:  60ms
   scan_parameters:
     active: false
-    interval: 500ms
+    interval: 320ms
     window: 60ms
 
+# ----------------------------
+# BLE clients (2 remotes)
+# ----------------------------
 ble_client:
-  - id: essence_remote
-    mac_address: ${remote_mac}
+  # Remote 1
+  - id: remote_1
+    mac_address: ${remote_1_mac}
     auto_connect: true
     on_connect:
       then:
-        - logger.log: "${friendly_name} connected"
+        - logger.log: "${friendly_name} remote_1 connected"
     on_disconnect:
       then:
-        - logger.log: "${friendly_name} disconnected"
+        - logger.log: "${friendly_name} remote_1 disconnected"
+
+  # Remote 2 (optional)
+  # - id: remote_2
+  #   mac_address: ${remote_2_mac}
+  #   auto_connect: true
+  #   on_connect:
+  #     then:
+  #       - logger.log: "${friendly_name} remote_2 connected"
+  #   on_disconnect:
+  #     then:
+  #       - logger.log: "${friendly_name} remote_2 disconnected"
 
 ble_client_hid:
-  - id: essence_hid
-    ble_client_id: essence_remote
+  # HID bridge for Remote 1
+  - id: remote_1_hid
+    ble_client_id: remote_1
 
-# Optional debug helpers:
-# These entities show the most recent decoded event in Home Assistant.
-sensor:
-  - platform: ble_client_hid
-    type: last_event_value
-    ble_client_hid_id: essence_hid
-    name: "${friendly_name} - Last Event Value"
+  # HID bridge for Remote 2 (optional)
+  # - id: remote_2_hid
+  #   ble_client_id: remote_2
 
-text_sensor:
-  - platform: ble_client_hid
-    ble_client_hid_id: essence_hid
-    name: "${friendly_name} - Last Action"
 
 ```
 
@@ -243,13 +254,12 @@ The event includes:
 
 If you reset the remote or it stops sending events:
 1. Ensure the ESP32 is running and scanning/connecting.
-2. Put the remote into pairing mode (varies by model/firmware).
+2. Put the remote into pairing mode (varies by model/firmware) (on BeoSound Essense remote hold down the up (empty circle) button until you see the green light above the circle).
 3. Watch ESPHome logs to confirm:
    - BLE connection opens
    - Notifications are enabled (CCC write)
 
 > If pairing mode steps differ across versions, open an issue with your remote revision and what worked.
-
 
 ## Troubleshooting
 
