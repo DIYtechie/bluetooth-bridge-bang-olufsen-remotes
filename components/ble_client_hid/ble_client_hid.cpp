@@ -112,6 +112,36 @@ static const char *button_name(ButtonId b) {
   }
 }
 
+static const char *long_timeout_name(ButtonId b) {
+  switch (b) {
+    case ButtonId::UP:
+      return "long_up";
+    case ButtonId::DOWN:
+      return "long_down";
+    case ButtonId::LEFT:
+      return "long_left";
+    case ButtonId::RIGHT:
+      return "long_right";
+    default:
+      return "long_unknown";
+  }
+}
+
+static const char *final_timeout_name(ButtonId b) {
+  switch (b) {
+    case ButtonId::UP:
+      return "final_up";
+    case ButtonId::DOWN:
+      return "final_down";
+    case ButtonId::LEFT:
+      return "final_left";
+    case ButtonId::RIGHT:
+      return "final_right";
+    default:
+      return "final_unknown";
+  }
+}
+
 static ButtonId raw_to_button_press(uint16_t raw) {
   // Essence Remote observed:
   // 0x0006 = Up
@@ -689,10 +719,10 @@ void BLEClientHID::send_input_report_event(esp_ble_gattc_cb_param_t *p_data) {
     st.is_down = true;
     st.long_fired = false;
 
-    this->cancel_timeout(std::string("final_") + button_name(press_btn));
+    this->cancel_timeout(final_timeout_name(press_btn));
     emit(std::string(button_name(press_btn)) + "_pressed", -1, raw_hex);
 
-    const std::string long_key = std::string("long_") + button_name(press_btn);
+    const char *long_key = long_timeout_name(press_btn);
     this->cancel_timeout(long_key);
 
     this->set_timeout(long_key, LONG_PRESS_MS, [this, press_btn]() {
@@ -749,7 +779,7 @@ void BLEClientHID::send_input_report_event(esp_ble_gattc_cb_param_t *p_data) {
     if (st.click_count < 3)
       st.click_count++;
 
-    const std::string final_key = std::string("final_") + button_name(rb);
+    const char *final_key = final_timeout_name(rb);
     this->cancel_timeout(final_key);
 
     this->set_timeout(final_key, MULTIPRESS_GAP_MS, [this, rb]() {

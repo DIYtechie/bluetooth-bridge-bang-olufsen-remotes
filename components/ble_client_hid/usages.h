@@ -1,14 +1,6 @@
-#include <map>
-#include <string>
+#pragma once
 
-
-struct UsagePage {
-  UsagePage(const char* name,
-            std::map<uint16_t, const char *> usages)
-      : name_(name), usages_(usages){};
-  const char* name_;
-  const std::map<uint16_t, const char *> usages_;
-  
-};
-
-extern const std::map<uint8_t, const UsagePage> USAGE_PAGES; 
+// This header is intentionally empty. Older versions exposed large HID usage
+// lookup tables here, but the current component parses and emits numeric usage
+// values directly. Keeping those tables as global std::map instances made
+// memory-constrained ESP32 builds vulnerable to boot-time bad_alloc failures.
