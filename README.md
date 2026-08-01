@@ -98,7 +98,12 @@ external_components:
     components: [ ble_client_hid ]
 ```
 
-> If you prefer pinning to a stable version later, replace `ref: master` with a tag like `ref: v0.1.0`.
+> For ESPHome 2026.7.0 and newer, use a ref that includes the ESPHome 2026
+> compatibility fixes. During testing, replace `ref: master` with the branch
+> you want to test, for example `ref: codex/esphome-2026-memory-fix`. Once the
+> fix is merged, `ref: master` will use the fixed component. If you prefer
+> pinning to a stable version later, replace `ref: master` with a tag like
+> `ref: v0.1.0`.
 
 
 ## Example YAML (BeoSound Essence Remote)
